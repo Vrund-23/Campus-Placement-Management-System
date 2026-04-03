@@ -60,7 +60,7 @@ const App = () => (
               <Route path="/settings" element={<AdminSettingsPage />} />
               <Route path="/placement-report" element={<PlacementReportPage />} />
               <Route path="/manage-tpcs" element={<ManageTPCPage />} />
-              <Route path="/manage-tpf" element={<ManageTPFPage />} />
+              <Route path="/manage-tpfs" element={<ManageTPFPage />} />
 
               <Route path="/manage-students" element={<ManageStudentsPage />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
