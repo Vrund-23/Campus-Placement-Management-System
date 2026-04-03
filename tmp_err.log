@@ -1,0 +1,12 @@
+﻿[dotenv@17.2.4] injecting env (0) from .env -- tip: ≡ƒöÉ prevent building .env in docker: https://dotenvx.com/prebuild
+Finding duplicates...
+node : Error: Error: SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string
+At line:1 char:1
++ node tmp_fix_dups.js 2>&1 | Out-File -Encoding utf8 tmp_err.log
++ ~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Error: Error: S.    ..ust be a string:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    at C:\Users\ASUS\OneDrive\Desktop\DesignEngineering\server\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async fixDuplicates (C:\Users\ASUS\OneDrive\Desktop\DesignEngineering\tmp_fix_dups.js:6:24)
