@@ -11,8 +11,7 @@ const multer = require("multer");
 // Configure Multer for TPF Excel Uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const { academicYear = '2025-26' } = req.query;
-    const dir = path.join(__dirname, `../data/TPFs/${academicYear}/`);
+    const dir = path.join(__dirname, `../data/TPFs/`);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -48,10 +47,9 @@ const isTPO = async (req, res, next) => {
   }
 };
 
-// Get all TPFs
+// Get all TPFs (Global across all academic years)
 router.get("/", [authorization, isTPO], async (req, res) => {
   try {
-    const { academicYear = '2025-26' } = req.query;
     const tpfs = await pool.query(
       `SELECT u.user_id, u.name, u.email, fp.employee_code as college_id, d.name as department_name, d.dept_id
        FROM users u
@@ -82,12 +80,11 @@ router.post("/upload", [authorization, isTPO, upload.single("file")], async (req
 // Sync TPFs from stored Excel file
 router.post("/sync", [authorization, isTPO], async (req, res) => {
   try {
-    const { academicYear = '2025-26' } = req.body;
-    const excelPath = path.join(__dirname, `../data/TPFs/${academicYear}/`, "TPF_List.xlsx");
+    const excelPath = path.join(__dirname, `../data/TPFs/`, "TPF_List.xlsx");
     
     if (!fs.existsSync(excelPath)) {
       return res.status(404).json({ 
-        error: `TPF list for ${academicYear} not found.`,
+        error: `TPF list not found.`,
         details: `Please ensure the file is uploaded first.`
       });
     }
@@ -131,17 +128,31 @@ router.post("/sync", [authorization, isTPO], async (req, res) => {
         
         if (userCheck.rows.length > 0) {
           const userId = userCheck.rows[0].user_id;
-          // Update existing user/profile
+
+          // Check if profile exists (Global)
+          const profileCheck = await pool.query("SELECT * FROM faculty_profiles WHERE user_id = $1", [userId]);
+
           await pool.query("BEGIN");
-          await pool.query("UPDATE users SET name = $1 WHERE user_id = $2", [name, userId]);
-          await pool.query(
-            "UPDATE faculty_profiles SET dept_id = $1, employee_code = $2 WHERE user_id = $3",
-            [dept.dept_id, college_id || null, userId]
-          );
+          await pool.query("UPDATE users SET name = $1, role_id = 3 WHERE user_id = $2", [name, userId]);
+
+          if (profileCheck.rows.length > 0) {
+            // Update existing global profile
+            await pool.query(
+              "UPDATE faculty_profiles SET dept_id = $1, employee_code = $2 WHERE user_id = $3",
+              [dept.dept_id, college_id || null, userId]
+            );
+            results.push({ name, email, status: "updated", isGlobal: true });
+          } else {
+            // Create new global profile
+            await pool.query(
+              "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+              [userId, dept.dept_id, college_id || null, "TPF Coordinator", "Global"]
+            );
+            results.push({ name, email, status: "profile_added", isGlobal: true });
+          }
           await pool.query("COMMIT");
-          results.push({ name, email, status: "updated" });
         } else {
-          // Create new TPF
+          // Create new TPF user and global profile
           const rawPassword = `TPF@${Math.floor(1000 + Math.random() * 9000)}`;
           const salt = await bcrypt.genSalt(10);
           const hashedPassword = await bcrypt.hash(rawPassword, salt);
@@ -153,13 +164,13 @@ router.post("/sync", [authorization, isTPO], async (req, res) => {
           );
           const userId = newUser.rows[0].user_id;
           await pool.query(
-            "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation) VALUES ($1, $2, $3, $4)",
-            [userId, dept.dept_id, college_id || null, "TPF Coordinator"]
+            "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+            [userId, dept.dept_id, college_id || null, "TPF Coordinator", "Global"]
           );
           await pool.query("COMMIT");
 
           const emailResult = await sendTPFWelcomeEmail(email, name, rawPassword);
-          results.push({ name, email, status: "created", emailSent: emailResult.success, rawPassword });
+          results.push({ name, email, status: "created", emailSent: emailResult.success, rawPassword, isGlobal: true });
         }
       } catch (innerErr) {
         await pool.query("ROLLBACK");
@@ -174,43 +185,62 @@ router.post("/sync", [authorization, isTPO], async (req, res) => {
   }
 });
 
-// Create new TPF
+// Create new TPF (Global)
 router.post("/", [authorization, isTPO], async (req, res) => {
   try {
     const { name, email, department_id, college_id } = req.body;
 
     // Check if user already exists
     const userCheck = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    let userId;
+
     if (userCheck.rows.length > 0) {
-      return res.status(400).json({ error: "User with this email already exists" });
+      userId = userCheck.rows[0].user_id;
+      // Check if profile exists (Global)
+      const profileCheck = await pool.query("SELECT * FROM faculty_profiles WHERE user_id = $1", [userId]);
+      if (profileCheck.rows.length > 0) {
+        return res.status(400).json({ error: `TPF Profile already exists for this email` });
+      }
+      
+      await pool.query("UPDATE users SET name = $1, role_id = 3 WHERE user_id = $2", [name, userId]);
+    } else {
+      // Generate random password
+      const rawPassword = `TPF@${Math.floor(1000 + Math.random() * 9000)}`;
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(rawPassword, salt);
+
+      // Insert user
+      const newUser = await pool.query(
+        "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 3, $3) RETURNING user_id",
+        [email, hashedPassword, name]
+      );
+      userId = newUser.rows[0].user_id;
+
+      // Send welcome email (only for new users)
+      const emailResult = await sendTPFWelcomeEmail(email, name, rawPassword);
+      
+      // Insert faculty profile (Global)
+      await pool.query(
+        "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+        [userId, department_id, college_id, "TPF Coordinator", "Global"]
+      );
+
+      return res.json({
+        message: "TPF created successfully",
+        tpf: { name, email, rawPassword },
+        emailSent: emailResult.success,
+      });
     }
 
-    // Generate random password (e.g., TPF@1234)
-    const rawPassword = `TPF@${Math.floor(1000 + Math.random() * 9000)}`;
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(rawPassword, salt);
-
-    // Insert user
-    const newUser = await pool.query(
-      "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 3, $3) RETURNING user_id",
-      [email, hashedPassword, name]
-    );
-
-    const userId = newUser.rows[0].user_id;
-
-    // Insert faculty profile
+    // Insert faculty profile (Global) for existing user
     await pool.query(
-      "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation) VALUES ($1, $2, $3, $4)",
-      [userId, department_id, college_id, "TPF Coordinator"]
+      "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+      [userId, department_id, college_id, "TPF Coordinator", "Global"]
     );
-
-    // Send welcome email with credentials
-    const emailResult = await sendTPFWelcomeEmail(email, name, rawPassword);
 
     res.json({
-      message: "TPF created successfully",
-      tpf: { name, email, rawPassword },
-      emailSent: emailResult.success,
+      message: "TPF profile created successfully",
+      isGlobal: true
     });
   } catch (err) {
     console.error(err.message);
@@ -218,7 +248,7 @@ router.post("/", [authorization, isTPO], async (req, res) => {
   }
 });
 
-// Bulk create TPFs (from Excel upload)
+// Bulk create TPFs (Global)
 router.post("/bulk", [authorization, isTPO], async (req, res) => {
   try {
     const { tpfs } = req.body; // Array of { name, email, department, college_id }
@@ -234,13 +264,6 @@ router.post("/bulk", [authorization, isTPO], async (req, res) => {
 
     for (const tpf of tpfs) {
       try {
-        // Check if user already exists
-        const userCheck = await pool.query("SELECT * FROM users WHERE email = $1", [tpf.email]);
-        if (userCheck.rows.length > 0) {
-          results.push({ ...tpf, status: "skipped", reason: "Email already exists" });
-          continue;
-        }
-
         // Match department by name or code (case-insensitive)
         const dept = depts.find(d =>
           d.name.toLowerCase() === (tpf.department || "").toLowerCase() ||
@@ -251,33 +274,45 @@ router.post("/bulk", [authorization, isTPO], async (req, res) => {
           continue;
         }
 
-        // Generate password
-        const rawPassword = `TPF@${Math.floor(1000 + Math.random() * 9000)}`;
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(rawPassword, salt);
+        // Check if user already exists
+        const userCheck = await pool.query("SELECT user_id FROM users WHERE email = $1", [tpf.email]);
+        let userId;
 
-        // Insert user
-        const newUser = await pool.query(
-          "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 3, $3) RETURNING user_id",
-          [tpf.email, hashedPassword, tpf.name]
-        );
-        const userId = newUser.rows[0].user_id;
+        if (userCheck.rows.length > 0) {
+           userId = userCheck.rows[0].user_id;
+           // Check if profile exists (Global)
+           const profileCheck = await pool.query("SELECT * FROM faculty_profiles WHERE user_id = $1", [userId]);
+           if (profileCheck.rows.length > 0) {
+             results.push({ ...tpf, status: "skipped", reason: `Profile already exists` });
+             continue;
+           }
+           await pool.query("UPDATE users SET name = $1, role_id = 3 WHERE user_id = $2", [tpf.name, userId]);
+        } else {
+          // Generate password
+          const rawPassword = `TPF@${Math.floor(1000 + Math.random() * 9000)}`;
+          const salt = await bcrypt.genSalt(10);
+          const hashedPassword = await bcrypt.hash(rawPassword, salt);
 
-        // Insert faculty profile
+          // Insert user
+          const newUser = await pool.query(
+            "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 3, $3) RETURNING user_id",
+            [tpf.email, hashedPassword, tpf.name]
+          );
+          userId = newUser.rows[0].user_id;
+          
+          await sendTPFWelcomeEmail(tpf.email, tpf.name, rawPassword);
+          results.push({ ...tpf, status: "created", rawPassword });
+        }
+
+        // Insert faculty profile (Global)
         await pool.query(
-          "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation) VALUES ($1, $2, $3, $4)",
-          [userId, dept.dept_id, tpf.college_id || null, "TPF Coordinator"]
+          "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+          [userId, dept.dept_id, tpf.college_id || null, "TPF Coordinator", "Global"]
         );
-
-        // Send email
-        const emailResult = await sendTPFWelcomeEmail(tpf.email, tpf.name, rawPassword);
-
-        results.push({
-          ...tpf,
-          status: "created",
-          emailSent: emailResult.success,
-          rawPassword,
-        });
+        
+        if (!results.find(r => r.email === tpf.email)) {
+            results.push({ ...tpf, status: "profile_added" });
+        }
       } catch (innerErr) {
         results.push({ ...tpf, status: "error", reason: innerErr.message });
       }

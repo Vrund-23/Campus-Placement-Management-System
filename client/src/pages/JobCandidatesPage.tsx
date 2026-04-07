@@ -119,7 +119,7 @@ export default function JobCandidatesPage() {
 
     const handleExport = () => {
         const exportData = candidates.map(c => ({
-            'Enrollment No': c.enrollment_no || '—',
+            'College ID': c.enrollment_no || '—',
             'Candidate Name': c.name,
             'Email': c.email,
             'Department': c.department,
@@ -201,7 +201,7 @@ export default function JobCandidatesPage() {
                                                 onCheckedChange={handleSelectAll}
                                             />
                                         </TableHead>
-                                        <TableHead>Enrollment No</TableHead>
+                                        <TableHead>College ID</TableHead>
                                         <TableHead>Candidate</TableHead>
                                         <TableHead>Department</TableHead>
                                         <TableHead>CGPA</TableHead>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useAcademicYear } from '@/contexts/AcademicYearContext';
 import { DEPARTMENTS } from '@/constants/departments';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { api } from '@/lib/api';
@@ -25,17 +26,26 @@ interface StudentReportData {
     department: string;
     gender: string;
     passing_year: string;
+    academic_year: string;
     isPlaced: boolean;
     placedCompanyName: string;
+    placedPackage?: string;
     cgpa: string;
 }
 
 export default function PlacementReportPage() {
     const { toast } = useToast();
+    const { selectedYear } = useAcademicYear();
     const [data, setData] = useState<StudentReportData[]>([]);
     const [loading, setLoading] = useState(true);
     const [branchFilter, setBranchFilter] = useState<string>('All');
-    const [yearFilter, setYearFilter] = useState<string>('All');
+    const [yearFilter, setYearFilter] = useState<string>(selectedYear || 'All');
+
+    useEffect(() => {
+        if (selectedYear) {
+            setYearFilter(selectedYear);
+        }
+    }, [selectedYear]);
 
     useEffect(() => {
         fetchData();
@@ -44,7 +54,7 @@ export default function PlacementReportPage() {
     const fetchData = async () => {
         try {
             setLoading(true);
-            const res = await api.get('/students/all');
+            const res = await api.get('/students/all?academicYear=all');
             setData(res);
         } catch (err: any) {
             toast({ title: 'Failed to load report data', description: err.message, variant: 'destructive' });
@@ -56,22 +66,19 @@ export default function PlacementReportPage() {
     // Always show all departments in the filter (not just ones that appear in student data)
     const branches = ['All', ...DEPARTMENTS];
 
-    const getAcademicYear = (year: string | null | undefined) => {
-        if (!year) return year;
-        const numYear = parseInt(year);
-        if (isNaN(numYear)) return year;
-        return `${numYear - 1}-${numYear.toString().slice(-2)}`;
-    };
-
     const academicYears = useMemo(() => {
-        const years = Array.from(new Set(data.map(item => getAcademicYear(item.passing_year)))).filter(Boolean).sort().reverse();
+        const years = Array.from(new Set(data.map(item => item.academic_year))).filter(Boolean).sort().reverse();
+        if (selectedYear && !years.includes(selectedYear)) {
+            years.unshift(selectedYear); // Add to the beginning or we can sort later
+            years.sort().reverse();
+        }
         return ['All', ...years];
-    }, [data]);
+    }, [data, selectedYear]);
 
     const filteredData = useMemo(() => {
         return data.filter(student => {
             if (!student.isPlaced) return false;
-            const academicYearStr = getAcademicYear(student.passing_year);
+            const academicYearStr = student.academic_year;
             if (yearFilter !== 'All' && academicYearStr !== yearFilter) return false;
             if (branchFilter !== 'All' && student.department !== branchFilter) return false;
             return true;
@@ -80,13 +87,14 @@ export default function PlacementReportPage() {
 
     const handleExport = () => {
         const exportData = filteredData.map(student => ({
-            'Enrollment No': student.enrollment_no || '—',
+            'College ID': student.enrollment_no || '—',
             'Name': student.name,
             'Department': student.department,
             'Gender': student.gender || '—',
-            'Academic Year': getAcademicYear(student.passing_year) || '—',
+            'Academic Year': student.academic_year || '—',
             'CGPA': student.cgpa || '—',
-            'Placed Company': student.placedCompanyName || '—'
+            'Placed Company': student.placedCompanyName || '—',
+            'Package (LPA)': student.placedPackage || '—'
         }));
 
         const ws = XLSX.utils.json_to_sheet(exportData);
@@ -155,13 +163,14 @@ export default function PlacementReportPage() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead className="pl-6">Enrollment No</TableHead>
+                                        <TableHead className="pl-6">College ID</TableHead>
                                         <TableHead>Name</TableHead>
                                         <TableHead>Department</TableHead>
                                         <TableHead>Gender</TableHead>
                                         <TableHead>Academic Year</TableHead>
                                         <TableHead>CGPA</TableHead>
-                                        <TableHead className="pr-6">Company</TableHead>
+                                        <TableHead>Company</TableHead>
+                                        <TableHead className="pr-6">Package</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -171,11 +180,12 @@ export default function PlacementReportPage() {
                                             <TableCell className="font-medium">{student.name}</TableCell>
                                             <TableCell>{student.department}</TableCell>
                                             <TableCell>{student.gender || '—'}</TableCell>
-                                            <TableCell>{getAcademicYear(student.passing_year) || '—'}</TableCell>
+                                            <TableCell>{student.academic_year || '—'}</TableCell>
                                             <TableCell>{student.cgpa || '—'}</TableCell>
-                                            <TableCell className="font-medium text-emerald-600 pr-6">
+                                            <TableCell className="font-medium text-emerald-600">
                                                 {student.placedCompanyName || '—'}
                                             </TableCell>
+                                            <TableCell className="pr-6">{student.placedPackage ? `${student.placedPackage} LPA` : '—'}</TableCell>
                                         </TableRow>
                                     ))}
                                     {filteredData.length === 0 && (

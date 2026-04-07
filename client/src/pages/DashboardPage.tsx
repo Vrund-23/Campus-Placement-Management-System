@@ -842,7 +842,7 @@ export default function DashboardPage() {
       // Convert to Excel format for better aesthetics as requested
       const worksheetData = res.map((s: any) => ({
         'Name': s.name,
-        'Enrollment No': s.enrollment_no || 'N/A',
+        'College ID': s.enrollment_no || 'N/A',
         'Department': s.department,
         'Gender': s.gender || 'N/A',
         'Academic Year': selectedYear,
@@ -1206,19 +1206,7 @@ export default function DashboardPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-3">
-              <Button 
-                variant="outline" 
-                className="bg-white/5 border-white/10 text-white hover:bg-white/10 hover:text-white backdrop-blur-md rounded-xl px-6"
-                onClick={exportPlacementReport}
-              >
-                <Download className="h-4 w-4 mr-2" /> Annual Report
-              </Button>
-              <Button 
-                className="bg-blue-600 hover:bg-blue-500 text-white shadow-xl shadow-blue-900/50 rounded-xl px-6"
-                onClick={() => navigate('/analytics')}
-              >
-                <TrendingUp className="h-4 w-4 mr-2" /> Global Forecast
-              </Button>
+              {/* Buttons removed as per user request */}
             </div>
           </div>
         </div>

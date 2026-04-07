@@ -97,12 +97,26 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// Get candidates for a specific job
+// Get candidates for a specific job (Restricted for TPF/TPC)
 router.get("/:id/candidates", authorization, async (req, res) => {
   try {
     const { id } = req.params;
-    const candidates = await pool.query(
-      `SELECT 
+
+    // Identify requester role
+    const userRes = await pool.query("SELECT role_id FROM users WHERE user_id = $1", [req.user.id]);
+    const roleId = userRes.rows[0].role_id;
+    let deptId = null;
+
+    // If requester is TPC (2) or TPF (3), force dept_id to their own department
+    if (roleId === 2 || roleId === 3) {
+      const facRes = await pool.query("SELECT dept_id FROM faculty_profiles WHERE user_id = $1", [req.user.id]);
+      if (facRes.rows.length > 0) {
+        deptId = facRes.rows[0].dept_id;
+      }
+    }
+
+    let query = `
+      SELECT 
         a.app_id,
         a.status as application_status,
         a.applied_at,
@@ -120,10 +134,17 @@ router.get("/:id/candidates", authorization, async (req, res) => {
        JOIN users u ON s.user_id = u.user_id
        LEFT JOIN departments d ON s.dept_id = d.dept_id
        WHERE a.job_id = $1
-       ORDER BY a.applied_at DESC`,
-      [id]
-    );
+    `;
+    const params = [id];
 
+    if (deptId) {
+      query += ` AND s.dept_id = $2`;
+      params.push(deptId);
+    }
+
+    query += ` ORDER BY a.applied_at DESC`;
+
+    const candidates = await pool.query(query, params);
     res.json(candidates.rows);
   } catch (err) {
     console.error(err.message);

@@ -92,7 +92,7 @@ router.post("/sync", [authorization, isTPC], async (req, res) => {
     }
 
     const { department_name, dept_id } = tpcResult.rows[0];
-    const { academicYear = '2024-25' } = req.body;
+    const { academicYear = '2025-26' } = req.body;
 
     // 2. Read Department-specific Excel file
     const excelFilename = `${department_name}_Students.xlsx`;
@@ -124,11 +124,11 @@ router.post("/sync", [authorization, isTPC], async (req, res) => {
 
     // 3. Process each student
     for (const row of studentsData) {
-      // Expected columns: name, department, college_id, mobile_number, mail_id
-      const name = row.name || row.Name || row.full_name;
-      const email = row.mail_id || row.Email || row.email || row.mail;
-      const college_id = row.college_id || row.enrollment_no || row.CollegeID || row.Id;
-      const mobile = row.mobile_number || row.Phone || row.mobile;
+      // Robust column mapping for various Excel header formats
+      const name = row.name || row.Name || row.full_name || row['Full Name'] || row.student_name;
+      const email = row.mail_id || row.Email || row.email || row.mail || row['Email Address'] || row.mail_id;
+      const college_id = row.college_id || row.enrollment_no || row.CollegeID || row.Id || row['College ID'] || row.enrollment || row.EnrollmentNo;
+      const mobile = row.mobile_number || row.Phone || row.mobile || row.Mobile || row['Mobile Number'] || row.contact_no || row.Contact;
 
       if (!email || !name) {
         results.push({ name: name || "Unknown", email: email || "N/A", status: "skipped", reason: "Missing name or email" });
@@ -226,7 +226,7 @@ router.post("/sync", [authorization, isTPC], async (req, res) => {
 // Get department students (for TPC view)
 router.get("/", [authorization, isTPC], async (req, res) => {
   try {
-    const { academicYear = '2024-25' } = req.query;
+    const { academicYear = '2025-26' } = req.query;
     const tpcResult = await pool.query(
       "SELECT dept_id FROM faculty_profiles WHERE user_id = $1", 
       [req.user.id]

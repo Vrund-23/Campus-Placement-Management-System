@@ -163,7 +163,10 @@ export default function ManageTPFPage() {
     if (uploadedRows.length === 0) return;
     try {
       setSending(true);
-      const res = await api.post('/tpf-management/bulk', { tpfs: uploadedRows });
+      const res = await api.post('/tpf-management/bulk', { 
+        tpfs: uploadedRows,
+        academicYear: selectedYear
+      });
       setResults(res.results);
       const created = res.results.filter((r: TPFResult) => r.status === 'created').length;
       const skipped = res.results.filter((r: TPFResult) => r.status === 'skipped').length;

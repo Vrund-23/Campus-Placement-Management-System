@@ -30,7 +30,7 @@ const upload = multer({
 // ─── GET /students/all — All students with verification status ───────────────
 router.get("/all", authorization, async (req, res) => {
   try {
-    const { dept_id, academicYear = '2024-25' } = req.query;
+    const { dept_id, academicYear = '2025-26' } = req.query;
     let finalDeptId = dept_id;
 
     // Identify requester role
@@ -51,17 +51,23 @@ router.get("/all", authorization, async (req, res) => {
         u.name as user_name,
         u.email,
         d.name as department_name,
-        c.name as placed_company_name
+        c.name as placed_company_name,
+        j.package as placed_package
       FROM student_profiles sp
       JOIN users u ON sp.user_id = u.user_id
       LEFT JOIN departments d ON sp.dept_id = d.dept_id
       LEFT JOIN applications a ON a.student_id = sp.student_id AND a.status = 'PLACED'
       LEFT JOIN job_postings j ON a.job_id = j.job_id
       LEFT JOIN companies c ON j.company_id = c.company_id
-      WHERE sp.academic_year = $1
+      WHERE 1=1
     `;
-    const params = [academicYear];
-    let paramIndex = 2;
+    const params = [];
+    let paramIndex = 1;
+
+    if (academicYear && academicYear !== 'all') {
+      query += ` AND sp.academic_year = $${paramIndex++}`;
+      params.push(academicYear);
+    }
 
     if (finalDeptId) {
       query += ` AND sp.dept_id = $${paramIndex++}`;
@@ -97,6 +103,7 @@ router.get("/all", authorization, async (req, res) => {
       personal_email: s.personal_email || null,
       date_of_birth: s.date_of_birth || null,
       passing_year: s.passing_year || null,
+      academic_year: s.academic_year || null,
       linkedin_url: s.linkedin_url || null,
       gap_years: s.gap_years ?? 0,
       // Verification & placement
@@ -105,6 +112,7 @@ router.get("/all", authorization, async (req, res) => {
       isPlaced: s.is_placed || false,
       placedCompany: s.placed_company_name || null,
       placedCompanyName: s.placed_company_name || null,
+      placedPackage: s.placed_package || null,
       verificationStage: s.tpo_verified ? 'tpo_verified'
         : s.tpc_verified ? 'tpc_verified'
         : 'pending',
@@ -127,7 +135,19 @@ router.put("/:id/verify", authorization, async (req, res) => {
     const col = colMap[stage];
     if (!col) return res.status(400).json({ error: 'Invalid stage. Use tpc or tpo.' });
 
-    // Step 1: Set the verification flag for this stage
+    // Access Control: TPF (3) and TPC (2) can only verify students in their own department
+    const userRes = await pool.query("SELECT role_id FROM users WHERE user_id = $1", [req.user.id]);
+    const roleId = userRes.rows[0].role_id;
+    if (roleId === 2 || roleId === 3) {
+      const facRes = await pool.query("SELECT dept_id FROM faculty_profiles WHERE user_id = $1", [req.user.id]);
+      const studentRes = await pool.query("SELECT dept_id FROM student_profiles WHERE student_id = $1", [id]);
+      if (facRes.rows.length > 0 && studentRes.rows.length > 0) {
+        if (facRes.rows[0].dept_id !== studentRes.rows[0].dept_id) {
+          return res.status(403).json({ error: "Access denied: Student is not in your department" });
+        }
+      }
+    }
+
     const result = await pool.query(
       `UPDATE student_profiles
        SET ${col} = TRUE
@@ -137,7 +157,7 @@ router.put("/:id/verify", authorization, async (req, res) => {
     );
 
     if (result.rowCount === 0) return res.status(404).json({ error: 'Student not found' });
-
+    
     const student = result.rows[0];
 
     // Step 2: Compute is_verified = TRUE when both tpc and tpo are verified
@@ -162,10 +182,23 @@ router.put("/:id/reject", authorization, async (req, res) => {
     const { id } = req.params;
     const { reason, stage } = req.body;
 
+    // Access Control: TPF (3) and TPC (2) can only reject students in their own department
+    const userRes = await pool.query("SELECT role_id FROM users WHERE user_id = $1", [req.user.id]);
+    const roleId = userRes.rows[0].role_id;
+    if (roleId === 2 || roleId === 3) {
+      const facRes = await pool.query("SELECT dept_id FROM faculty_profiles WHERE user_id = $1", [req.user.id]);
+      const studentRes = await pool.query("SELECT dept_id FROM student_profiles WHERE student_id = $1", [id]);
+      if (facRes.rows.length > 0 && studentRes.rows.length > 0) {
+        if (facRes.rows[0].dept_id !== studentRes.rows[0].dept_id) {
+          return res.status(403).json({ error: "Access denied: Student is not in your department" });
+        }
+      }
+    }
+
     // Reject sets all higher-level verifications to false and alerts the student
     const result = await pool.query(
       `UPDATE student_profiles
-       SET tpc_verified = FALSE, tpo_verified = FALSE, tpf_verified = FALSE, is_verified = FALSE
+       SET tpc_verified = FALSE, tpo_verified = FALSE, is_verified = FALSE
        WHERE student_id = $1
        RETURNING *`,
       [id]

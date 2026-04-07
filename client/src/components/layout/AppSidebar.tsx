@@ -31,7 +31,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { NavLink } from '@/components/NavLink';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useNavigate } from 'react-router-dom';
@@ -221,8 +221,11 @@ export function AppSidebar() {
       <SidebarFooter className="border-t border-sidebar-border p-4">
         <div className="flex items-center gap-3">
           <Avatar className="h-9 w-9 shrink-0">
+            {user.profile_picture_url && (
+              <AvatarImage src={`http://localhost:5000${user.profile_picture_url}`} alt={user.name} className="object-cover" />
+            )}
             <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-              {user.name.split(' ').map(n => n[0]).join('')}
+              {user.name.split(' ').map((n: string) => n[0]).join('')}
             </AvatarFallback>
           </Avatar>
           {!collapsed && (

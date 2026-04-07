@@ -56,11 +56,12 @@ router.get("/", [authorization, isTPO], async (req, res) => {
     // but typically TPCs are global or based on current season. 
     // For now, returning all role_id = 2 users with their faculty profiles.
     const tpcs = await pool.query(
-      `SELECT u.user_id, u.name, u.email, fp.employee_code as college_id, d.name as department_name, d.dept_id
+      `SELECT u.user_id, u.name, u.email, fp.employee_code as college_id, d.name as department_name, d.dept_id, fp.academic_year
        FROM users u
        JOIN faculty_profiles fp ON u.user_id = fp.user_id
        JOIN departments d ON fp.dept_id = d.dept_id
-       WHERE u.role_id = 2` // 2 = tpc
+       WHERE u.role_id = 2 AND fp.academic_year = $1`, // 2 = tpc
+       [academicYear]
     );
     res.json(tpcs.rows);
   } catch (err) {
@@ -134,17 +135,31 @@ router.post("/sync", [authorization, isTPO], async (req, res) => {
         
         if (userCheck.rows.length > 0) {
           const userId = userCheck.rows[0].user_id;
-          // Update existing user/profile
+          
+          // Check if profile for this year already exists
+          const profileCheck = await pool.query("SELECT * FROM faculty_profiles WHERE user_id = $1 AND academic_year = $2", [userId, academicYear]);
+
           await pool.query("BEGIN");
           await pool.query("UPDATE users SET name = $1 WHERE user_id = $2", [name, userId]);
-          await pool.query(
-            "UPDATE faculty_profiles SET dept_id = $1, employee_code = $2 WHERE user_id = $3",
-            [dept.dept_id, college_id || null, userId]
-          );
+          
+          if (profileCheck.rows.length > 0) {
+            // Update existing profile for this year
+            await pool.query(
+              "UPDATE faculty_profiles SET dept_id = $1, employee_code = $2 WHERE user_id = $3 AND academic_year = $4",
+              [dept.dept_id, college_id || null, userId, academicYear]
+            );
+            results.push({ name, email, status: "updated", academicYear });
+          } else {
+            // Create new profile for existing user for this year
+            await pool.query(
+              "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+              [userId, dept.dept_id, college_id || null, "TPC Coordinator", academicYear]
+            );
+            results.push({ name, email, status: "profile_added", academicYear });
+          }
           await pool.query("COMMIT");
-          results.push({ name, email, status: "updated" });
         } else {
-          // Create new TPC
+          // Create new TPC user and profile
           const rawPassword = `TPC@${Math.floor(1000 + Math.random() * 9000)}`;
           const salt = await bcrypt.genSalt(10);
           const hashedPassword = await bcrypt.hash(rawPassword, salt);
@@ -156,13 +171,13 @@ router.post("/sync", [authorization, isTPO], async (req, res) => {
           );
           const userId = newUser.rows[0].user_id;
           await pool.query(
-            "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation) VALUES ($1, $2, $3, $4)",
-            [userId, dept.dept_id, college_id || null, "TPC Coordinator"]
+            "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+            [userId, dept.dept_id, college_id || null, "TPC Coordinator", academicYear]
           );
           await pool.query("COMMIT");
 
           const emailResult = await sendTPCWelcomeEmail(email, name, rawPassword);
-          results.push({ name, email, status: "created", emailSent: emailResult.success, rawPassword });
+          results.push({ name, email, status: "created", emailSent: emailResult.success, rawPassword, academicYear });
         }
       } catch (innerErr) {
         await pool.query("ROLLBACK");
@@ -180,32 +195,48 @@ router.post("/sync", [authorization, isTPO], async (req, res) => {
 // Create new TPC
 router.post("/", [authorization, isTPO], async (req, res) => {
   try {
-    const { name, email, department_id, college_id } = req.body;
+    const { name, email, department_id, college_id, academicYear = '2025-26' } = req.body;
 
     // Check if user already exists
     const userCheck = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    let userId;
+
     if (userCheck.rows.length > 0) {
-      return res.status(400).json({ error: "User with this email already exists" });
+      userId = userCheck.rows[0].user_id;
+      // Check if profile for this year exists
+      const profileCheck = await pool.query("SELECT * FROM faculty_profiles WHERE user_id = $1 AND academic_year = $2", [userId, academicYear]);
+      if (profileCheck.rows.length > 0) {
+        return res.status(400).json({ error: `TPC Profile for ${academicYear} already exists for this email` });
+      }
+      
+      await pool.query("UPDATE users SET name = $1, role_id = 2 WHERE user_id = $2", [name, userId]);
+    } else {
+      // Generate random password
+      const rawPassword = `TPC@${Math.floor(1000 + Math.random() * 9000)}`;
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(rawPassword, salt);
+
+      // Insert user
+      const newUser = await pool.query(
+        "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 2, $3) RETURNING user_id",
+        [email, hashedPassword, name]
+      );
+      userId = newUser.rows[0].user_id;
+
+      // Send welcome email (only for new users)
+      await sendTPCWelcomeEmail(email, name, rawPassword);
     }
 
-    // Generate random password (e.g., TPC@1234)
-    const rawPassword = `TPC@${Math.floor(1000 + Math.random() * 9000)}`;
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(rawPassword, salt);
-
-    // Insert user
-    const newUser = await pool.query(
-      "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 2, $3) RETURNING user_id",
-      [email, hashedPassword, name]
-    );
-
-    const userId = newUser.rows[0].user_id;
-
-    // Insert faculty profile
+    // Insert faculty profile for this year
     await pool.query(
-      "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation) VALUES ($1, $2, $3, $4)",
-      [userId, department_id, college_id, "TPC Coordinator"]
+      "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+      [userId, department_id, college_id, "TPC Coordinator", academicYear]
     );
+
+    res.json({
+      message: "TPC profile created successfully",
+      academicYear
+    });
 
     // Send welcome email with credentials
     const emailResult = await sendTPCWelcomeEmail(email, name, rawPassword);
@@ -224,7 +255,7 @@ router.post("/", [authorization, isTPO], async (req, res) => {
 // Bulk create TPCs (from Excel upload)
 router.post("/bulk", [authorization, isTPO], async (req, res) => {
   try {
-    const { tpcs } = req.body; // Array of { name, email, department, college_id }
+    const { tpcs, academicYear = '2025-26' } = req.body; // Array of { name, email, department, college_id }
     if (!Array.isArray(tpcs) || tpcs.length === 0) {
       return res.status(400).json({ error: "No TPC data provided" });
     }
@@ -237,13 +268,6 @@ router.post("/bulk", [authorization, isTPO], async (req, res) => {
 
     for (const tpc of tpcs) {
       try {
-        // Check if user already exists
-        const userCheck = await pool.query("SELECT * FROM users WHERE email = $1", [tpc.email]);
-        if (userCheck.rows.length > 0) {
-          results.push({ ...tpc, status: "skipped", reason: "Email already exists" });
-          continue;
-        }
-
         // Match department by name or code (case-insensitive)
         const dept = depts.find(d =>
           d.name.toLowerCase() === (tpc.department || "").toLowerCase() ||
@@ -254,33 +278,45 @@ router.post("/bulk", [authorization, isTPO], async (req, res) => {
           continue;
         }
 
-        // Generate password
-        const rawPassword = `TPC@${Math.floor(1000 + Math.random() * 9000)}`;
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(rawPassword, salt);
+        // Check if user already exists
+        const userCheck = await pool.query("SELECT user_id FROM users WHERE email = $1", [tpc.email]);
+        let userId;
 
-        // Insert user
-        const newUser = await pool.query(
-          "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 2, $3) RETURNING user_id",
-          [tpc.email, hashedPassword, tpc.name]
-        );
-        const userId = newUser.rows[0].user_id;
+        if (userCheck.rows.length > 0) {
+           userId = userCheck.rows[0].user_id;
+           // Check if profile for this year exists
+           const profileCheck = await pool.query("SELECT * FROM faculty_profiles WHERE user_id = $1 AND academic_year = $2", [userId, academicYear]);
+           if (profileCheck.rows.length > 0) {
+             results.push({ ...tpc, status: "skipped", reason: `Profile for ${academicYear} already exists` });
+             continue;
+           }
+           await pool.query("UPDATE users SET name = $1, role_id = 2 WHERE user_id = $2", [tpc.name, userId]);
+        } else {
+          // Generate password
+          const rawPassword = `TPC@${Math.floor(1000 + Math.random() * 9000)}`;
+          const salt = await bcrypt.genSalt(10);
+          const hashedPassword = await bcrypt.hash(rawPassword, salt);
+
+          // Insert user
+          const newUser = await pool.query(
+            "INSERT INTO users (email, password_hash, role_id, name) VALUES ($1, $2, 2, $3) RETURNING user_id",
+            [tpc.email, hashedPassword, tpc.name]
+          );
+          userId = newUser.rows[0].user_id;
+          
+          await sendTPCWelcomeEmail(tpc.email, tpc.name, rawPassword);
+          results.push({ ...tpc, status: "created", rawPassword });
+        }
 
         // Insert faculty profile
         await pool.query(
-          "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation) VALUES ($1, $2, $3, $4)",
-          [userId, dept.dept_id, tpc.college_id || null, "TPC Coordinator"]
+          "INSERT INTO faculty_profiles (user_id, dept_id, employee_code, designation, academic_year) VALUES ($1, $2, $3, $4, $5)",
+          [userId, dept.dept_id, tpc.college_id || null, "TPC Coordinator", academicYear]
         );
-
-        // Send email
-        const emailResult = await sendTPCWelcomeEmail(tpc.email, tpc.name, rawPassword);
-
-        results.push({
-          ...tpc,
-          status: "created",
-          emailSent: emailResult.success,
-          rawPassword,
-        });
+        
+        if (!results.find(r => r.email === tpc.email)) {
+            results.push({ ...tpc, status: "profile_added" });
+        }
       } catch (innerErr) {
         results.push({ ...tpc, status: "error", reason: innerErr.message });
       }

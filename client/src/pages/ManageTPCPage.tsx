@@ -164,7 +164,10 @@ export default function ManageTPCPage() {
     if (uploadedRows.length === 0) return;
     try {
       setSending(true);
-      const res = await api.post('/tpc-management/bulk', { tpcs: uploadedRows });
+      const res = await api.post('/tpc-management/bulk', { 
+        tpcs: uploadedRows,
+        academicYear: selectedYear 
+      });
       setResults(res.results);
       const created = res.results.filter((r: TPCResult) => r.status === 'created').length;
       const skipped = res.results.filter((r: TPCResult) => r.status === 'skipped').length;
